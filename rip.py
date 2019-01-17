@@ -113,9 +113,9 @@ elif sys.argv[1] == "--text":
     data = c.execute("SELECT ncode, title, chapter, chaptitle, content from narou where ncode=?", (sys.argv[2],)).fetchall()
     data.sort(key=lambda x:x[2])
     if len(sys.argv) == 4:
-        data = data[int(sys.argv[3]):]
+        data = data[int(sys.argv[3])+1:]
     if len(sys.argv) >= 5:
-        data = data[int(sys.argv[3]):int(sys.argv[4])]
+        data = data[int(sys.argv[3])+1:int(sys.argv[4])+1]
     print(f"{data[0][1]}")
     for chapter in data:
         print(f"\n\n----{chapter[3]}----\n\n")
