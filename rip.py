@@ -1,9 +1,64 @@
 #!python
 
+
+
+# Licensed under the Apache License, Version 2.0. So is yomou.py
+
+
+
+# Requires a modern version of Python 3.
+
+# Note: This tool scrapes each work's normal HTML pages, rather than using the txtdownload feature ( https://ncode.syosetu.com/txtdownload/top/ncode/108715/ ).
+# This is becaue the txtdownload feature seems to have a much rougher rate limit than the normal HTML pages.
+# It also requires login cookies to function, and the way the ncode is encoded is different (e.g. n8725k becomes 108715).
+# Like working against individual HTML pages, it has to be done one chapter at a time, too.
+# It would, actually, be ideal to get things from the txtdownload function instead of scraping HTML.
+# The txtdownload function gives you special markup before it's converted to HTML, like so: "『|さまよえる剣《ワンダリング・ソード》』"
+
+# Narou has a real API, but it does not allow downloading chapter text. https://dev.syosetu.com/man/man/ https://dev.syosetu.com/man/api/
+
+# Narou also has an API for generating a PDF from an entire novel. https://pdfnovels.net/n8725k/
+
+
+
+# Number of chapters to download before stopping and syncing the database / sleeping to enforce local rate limit. Should not have a significant impact on speed unless it goes below limit_connections or is so high that you get ratelimited by narou.
+# default is 25
+limit_chapters_at_once = 25
+# Local ratelimit. Reduce this if you get ratelimited by narou.
+# default is 10
+chapters_per_second = 10
+
+# Simultaneous connection limit, reduce this if opening too many connections at once is getting you ratelimited or causing other problems.
+# default is 25
+limit_connections = 25
+
+
+# try to recover from ratelimits gracefully by waiting this many seconds.
+# should be large enough that limit_chapters_at_once chapters per wait_if_ratelimited seconds is 100% definitely below the rate limit.
+# default is 10
+wait_if_ratelimited = 10
+
+# Disable this if you need to be 100% certain that each individual chapter's update time is checked. Enable it for a small speed boost when doing minor updates.
+# default is True
+enable_per_novel_datetime_check = True
+# Same but for per-chapter update time. You do not want to set this. Use --deletedatetimedata instead.
+# default is True
+enable_per_chapter_datetime_check = True
+
+# Depending on how far you are from japan and how bad your internet is
+# Values that are too low make connections get reset often and make it more likely to get rate limited
+# Value that are too high make the scraper get "stuck" for long periods of time if a connection silently disappears or is randomly very slow
+# default is 8
+chapter_timeout = 8
+
+
+
 from bs4 import BeautifulSoup
 import urllib
 from urllib.parse import urljoin
 import sys
+import json
+import time
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -18,30 +73,38 @@ import sqlite3
 database = sqlite3.connect("naroudb.db")
 c = database.cursor()
 
-c.execute("create table if not exists narou (ncode text, title text, chapcode text, chapter int, chaptitle text, datetime text, content text)")
-c.execute("create unique index if not exists idx_chapcode on narou (chapcode)")
+c.execute("CREATE table if not exists narou (ncode text, title text, chapcode text, chapter int, chaptitle text, datetime text, content text)")
+c.execute("CREATE unique index if not exists idx_chapcode on narou (chapcode)")
 
-c.execute("create table if not exists ranks (ncode text, rank text)")
-c.execute("create unique index if not exists idx_ncode on ranks (ncode)")
+c.execute("CREATE table if not exists ranks (ncode text, rank text, datetime text)")
+c.execute("CREATE unique index if not exists idx_ncode on ranks (ncode)")
 
 arguments = []
 if len(sys.argv) < 2:
+    print("--yomou to get the top 300 from the yomou 'total_total' page")
+    print("--titles to list the ncodes and titles of all works in the database")
+    print("--ranklist to get the rankings of all works in the database")
+    print("--text <ncode> to get the complete stored text of the given work")
+    print("--chapters <ncode> to get the list of chapters stored for the given work")
+    print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one work)")
+    exit()
+elif sys.argv[1] == "--yomou":
     import yomou
     arguments = yomou.get_top_300("http://yomou.syosetu.com/rank/list/type/total_total/")
 elif sys.argv[1] == "--titles":
-    titles = c.execute("select ncode, title from narou where chapter=1").fetchall()
+    titles = c.execute("SELECT ncode, title from narou where chapter=1").fetchall()
     if titles != None:
         for title in titles:
             print(f"{title[0]}; {title[1]}")
     exit()
 elif sys.argv[1] == "--ranklist":
-    titles = c.execute("select ncode, rank from ranks").fetchall()
+    titles = c.execute("SELECT ncode, rank from ranks").fetchall()
     if titles != None:
         for title in titles:
             print(f"{title[0]};{title[1]}")
     exit()
 elif sys.argv[1] == "--text":
-    data = c.execute("select ncode, title, chapter, chaptitle, content from narou where ncode=?", (sys.argv[2],)).fetchall()
+    data = c.execute("SELECT ncode, title, chapter, chaptitle, content from narou where ncode=?", (sys.argv[2],)).fetchall()
     data.sort(key=lambda x:x[2])
     print(f"{data[0][1]}")
     for chapter in data:
@@ -49,145 +112,247 @@ elif sys.argv[1] == "--text":
         print(f"{chapter[4]}")
     exit()
 elif sys.argv[1] == "--chapters":
-    data = c.execute("select ncode, title, chapter, chaptitle from narou where ncode=?", (sys.argv[2],)).fetchall()
+    data = c.execute("SELECT ncode, title, chapter, chaptitle from narou where ncode=?", (sys.argv[2],)).fetchall()
     data.sort(key=lambda x:x[2])
     print(f"{data[0][1]} ({data[0][0]})")
     for chapter in data:
         print(f"{chapter[2]} - {chapter[3]}")
     exit()
+elif sys.argv[1] == "--deletedatetimedata":
+    # undocumented, for debugging/repair only
+    print("Setting ALL datetime data to NULL. This is only for debugging/repair.")
+    c.execute("UPDATE ranks set datetime=null")
+    c.execute("UPDATE narou set datetime=null")
+    database.commit()
+    exit()
 else:
     arguments = []
     for arg in sys.argv[1:]:
-        arguments += [[arg, None]]
-    
+        arguments += [[arg, -1]]
+
+def response_text_indicates_ratelimit(string):
+    return "Too many access!" in string
+
+def response_code_indicates_ratelimit(code):
+    return code == 503
 
 print("note: chapter downloads aren't persistent until all updates are downloaded")
-for argument in arguments:
-    print(f"ripping {argument}")
-    
+for asdf in range(len(arguments)):
+    argument = arguments[asdf]
     mainurl = argument[0]
     rank = argument[1]
     if "https://" not in mainurl and "http://" not in mainurl:
-        mainurl = "https://ncode.syosetu.com/" + mainurl
+        mainurl = "http://ncode.syosetu.com/" + mainurl
+    
+    mainurl = mainurl.replace("https://", "http://")
+    
+    progress_string = f"{asdf+1}/{len(arguments)}"
+    
+    print(f"ripping {mainurl} ({progress_string})")
     
     ncode = mainurl.rstrip("/").rsplit('/', 1)[-1]
+    
+    # check if it's up to date or not
+    
+    info_json = None
+    failing = True
+    while failing:
+        try:
+            myurl = f"http://api.syosetu.com/novelapi/api/?out=json&ncode={ncode}&of=nu"
+            
+            headers = { 'User-Agent' : 'Mozilla/5.0' }
+            req = urllib.request.Request(myurl, None, headers)
+
+            r = urllib.request.urlopen(req)
+            
+            info_json = r.read()
+            r.close()
+            failing = False
+        except urllib.request.HTTPError as e:
+            if response_code_indicates_ratelimit(e.code):
+                print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
+                time.sleep(wait_if_ratelimited)
+                exit()
+            print(f"(exception `{e}`; retrying)")
+            time.sleep(1)
+        except Exception as e:
+            print(f"(exception `{e}`; retrying)")
+            time.sleep(1)
+    
+    info = json.loads(info_json)
+    
+    if len(info) == 1:
+        print(f"work {ncode} does not exist or no longer exists on narou. skipping")
+        continue
+    
+    novel_datetime = info[1]["novelupdated_at"]
+    
+    if enable_per_novel_datetime_check and c.execute("SELECT datetime from ranks where ncode=? and datetime=?", (ncode, novel_datetime)).fetchone() != None:
+        print(f"up to date, skipping")
+        continue
+    
+    print("getting chapter listing...")
     
     data = None
     failing = True
     while failing:
         try:
+            headers = { 'User-Agent' : 'Mozilla/5.0' }
+            req = urllib.request.Request(mainurl, None, headers)
+            
             r = urllib.request.urlopen(mainurl)
             data = r.read()
             r.close()
             failing = False
-        except:
-            from time import sleep
-            print("(retrying)")
-            sleep(1) 
+        except urllib.request.HTTPError as e:
+            if response_code_indicates_ratelimit(e.code):
+                print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
+                time.sleep(wait_if_ratelimited)
+                exit()
+            print(f"(exception `{e}`; retrying)")
+            time.sleep(1)
+        except Exception as e:
+            print(f"(exception `{e}`; retrying)")
+            time.sleep(1)
+    
     soup = BeautifulSoup(data, "html.parser")
     
-    title = soup.select("#novel_color .novel_title")[0].get_text().strip()
-    
-    chapterurls = []
-    chaptertimes = []
-    chaptertitles = []
-    for li in soup.select(".index_box .novel_sublist2 .subtitle a"):
-        chapterurls += [urljoin(mainurl, li.get("href"))]
-        chaptertitles += [li.get_text()]
-    for dt in soup.select(".index_box .novel_sublist2 .long_update"):
-        chaptertimes += [re.search("([0-9]{4}/[0-1][0-9]/[0-9]{2} [0-2][0-9]:[0-5][0-9])", dt.get_text())[1]]
-    
-    if len(chaptertimes) != len(chapterurls) or len(chaptertimes) != len(chaptertitles):
-        print("Assert: chapter data lists are not all of same length")
+    if response_text_indicates_ratelimit(soup.get_text()):
+        print("you've been ratelimited by narou. wait a while and try again")
         exit()
     
-    if False:
-        nofetch = []
-        count = len(chapterurls)
-        for i in range(len(chapterurls)):
-            url = chapterurls[i]
-            chapter = url.rstrip("/").rsplit('/', 1)[-1]
-            chapcode = ncode+"-"+chapter
-            time = chaptertimes[i]
-            knowntime = c.execute("select datetime from narou where chapcode=?", (chapcode,)).fetchone()
-            if knowntime != None:
-                knowntime = knowntime[0]
-                if knowntime == time and time != None:
-                    nofetch += [url]
+    
+    
+    title = soup.select("#novel_color .novel_title")
+    
+    if len(title) == 0:
+        print(f"work {ncode} does not have a coherent page, skipping.")
+        continue
         
-        for delete in nofetch:
-            index = chapterurls.index(delete)
-            del chapterurls[index]
-            del chaptertimes[index]
+    title = title[0].get_text().strip()
     
-    datas = [""] * len(chapterurls)
-    texts = [""] * len(chapterurls)
-    
-    retrycount = 0
-    
-    async def fetch(session, url):
-        i = 0
-        while i < retrycount or retrycount <= 0:
-            try:
-                # depending on how far you are from japan and how bad your internet is, you might need to raise this 3 to something like a 5 or an 8 - but the higher it is, the greater the number of connections that get trapped
-                async with session.get(url, timeout=3) as response:
-                    return await response.text()
-            except asyncio.TimeoutError:
-                #print("retrying a connection")
+    chapterstuff = [] # url, title, time
+    for entry in soup.select(".index_box .novel_sublist2"):
+        li = entry.select(".subtitle a")[0]
+        dt = entry.select(".long_update")[0]
+        suburl = li.get("href")
+        updates = dt.select("span")
+        if len(updates) > 0:
+            datetime = updates[0].get("title")
+        else:
+            datetime = dt.get_text()
+        datetime = re.search("([0-9]{4}/[0-1][0-9]/[0-9]{2} [0-2][0-9]:[0-5][0-9])", datetime)
+        
+        if ncode not in suburl or datetime is None:
+            continue
+        
+        datetime = datetime[1]
+        
+        if enable_per_chapter_datetime_check:
+            chapurl = suburl.rstrip("/").rsplit('/', 1)[-1]
+            chapcode = ncode+"-"+chapurl
+            if c.execute("SELECT * from narou where chapcode=? and datetime=?", (chapcode, datetime)).fetchone() != None:
                 continue
+        
+        chapterstuff += [[urljoin(mainurl, suburl), li.get_text(), datetime]]
     
-    async def load_chapter(session, url, index):
-        data = await fetch(session, url)
-        print(f"loaded {url}")
-        datas[index] = data
     
-    async def load_all_chapters():
-        connector = aiohttp.TCPConnector(ttl_dns_cache=100000000, limit=100, force_close=True, enable_cleanup_closed=True)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            tasks = []
+    while len(chapterstuff) > 0:
+        workarray = chapterstuff[:limit_chapters_at_once]
+        chapterstuff = chapterstuff[limit_chapters_at_once:]
+        
+        datas = [""] * len(workarray)
+        
+        retrycount = 0
+        
+        async def fetch(session, url):
             i = 0
-            for url in chapterurls:
-                tasks.append(load_chapter(session, url, i))
-                i += 1
-            responses = asyncio.gather(*tasks)
-            await responses
+            while i < retrycount or retrycount <= 0:
+                try:
+                    async with session.get(url, timeout=chapter_timeout) as response:
+                        if response.status != 200:
+                            return None
+                        return await response.text()
+                except asyncio.TimeoutError:
+                    #print("retrying a connection")
+                    continue
+        
+        async def load_chapter(session, url, index):
+            data = await fetch(session, url)
+            print(f"loaded {url}")
+            datas[index] = data
+        
+        async def load_all_chapters():
+            connector = aiohttp.TCPConnector(ttl_dns_cache=100000000, limit=limit_connections, force_close=True, enable_cleanup_closed=True)
+            async with aiohttp.ClientSession(connector=connector, headers={'User-Agent': 'Mozilla/5.0'}) as session:
+                tasks = []
+                i = 0
+                for workdata in workarray:
+                    url = workdata[0]
+                    tasks.append(load_chapter(session, url, i))
+                    i += 1
+                responses = asyncio.gather(*tasks)
+                await responses
+        
+        start_time = time.time()
+        
+        loop = asyncio.get_event_loop()
+        
+        future = asyncio.ensure_future(load_all_chapters())
+        loop.run_until_complete(future)
+        
+        ratelimited = False
+        
+        print("writing to database and checking for ratelimiting errors...")
+        
+        for index in range(len(workarray)):
+            url = workarray[index][0]
+            chaptitle = workarray[index][1]
+            datetime = workarray[index][2]
+            
+            chapternum = url.rstrip("/").rsplit('/', 1)[-1]
+            chapcode = ncode+"-"+chapternum
+            text = datas[index]
+            datas[index] = ""
+            
+            if text == None:
+                ratelimited = True
+                chapterstuff += [[url, chaptitle, datetime]]
+                continue
+            
+            soup = BeautifulSoup(text, "html.parser")
+            
+            text = ""
+            for entry in soup.select("#novel_honbun"):
+                text += entry.get_text()
+            
+            c.execute("INSERT or replace into narou values (?,?,?,?,?,?,?)", (ncode, title, chapcode, int(chapternum), chaptitle, datetime, text))
+        
+        database.commit()
+        
+        if ratelimited:
+            print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
+            time.sleep(wait_if_ratelimited)
+        
+        end_time = time.time()
+        difference = end_time - start_time
+        actual_desired_bundle_time = len(workarray) / chapters_per_second
+        want_to_sleep = actual_desired_bundle_time - difference
+        if want_to_sleep > 0:
+            rounded = round(want_to_sleep*1000)/1000
+            print(f"sleeping for {rounded} seconds to reduce the risk of getting ratelimited...")
+            time.sleep(want_to_sleep)
+        
+        print(f"{len(chapterstuff)} chapters left to go for this story.")
+        
     
-    loop = asyncio.get_event_loop()
-    
-    future = asyncio.ensure_future(load_all_chapters())
-    loop.run_until_complete(future)
-    
-    for index in range(len(datas)):
-        soup = BeautifulSoup(datas[index], "html.parser")
-        for entry in soup.select("#novel_honbun"):
-            [rt.extract() for rt in entry.findAll("rt")]
-            [rp.extract() for rp in entry.findAll("rp")]
-            texts[index] = entry.get_text()
-    
-    print("writing to database...")
-    for index in range(len(chapterurls)):
-        url = chapterurls[index]
-        chapter = url.rstrip("/").rsplit('/', 1)[-1]
-        chapcode = ncode+"-"+chapter
-        time = chaptertimes[index]
-        text = texts[index]
-        chaptitle = chaptertitles[index]
-        c.execute("insert or replace into narou values (?,?,?,?,?,?,?)", (ncode, title, chapcode, int(chapter), chaptitle, time, text))
+    if rank == -1:
+        c.execute("UPDATE ranks set datetime=? where ncode=(?)", (novel_datetime, ncode))
+    else:
+        c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
+        c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
     database.commit()
     
-    c.execute("delete from ranks where rank=(?)", (rank,))
-    c.execute("insert or replace into ranks values (?,?)", (ncode, rank))
-    database.commit()
-    
-    print("done. writing to file...")
-    outputs = c.execute("select * from narou where ncode=? order by chapter asc", (ncode,)).fetchall()
-    if outputs != None:
-        realoutputs = []
-        for output in outputs:
-            realoutputs += [output[-1]]
-        f = open("scripts/"+ncode+".txt", "w", encoding="utf-8", newline="\n")
-        f.write("\n\n\n".join(realoutputs).replace("《", "«").replace("》", "»").replace("〈", "‹").replace("〉", "›"))
-        f.close()
     print("done.")
 
 database.commit()
