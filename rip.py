@@ -372,5 +372,6 @@ database.commit()
 c.close()
 database.close()
 
-print("You tried to rip the following stories, but they do not exist on narou. If they existed before, they were probably deleted.")
-print(" ".join(dead))
+if len(dead) > 0:
+    print("You tried to rip the following stories, but they do not exist on narou. If they existed before, they were probably deleted.")
+    print(" ".join(dead))
