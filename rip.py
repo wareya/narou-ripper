@@ -82,6 +82,7 @@ c.execute("CREATE unique index if not exists idx_ncode on ranks (ncode)")
 arguments = []
 if len(sys.argv) < 2:
     print("--yomou to get the top 300 from the yomou 'total_total' page")
+    print("--updateknown to update all known works")
     print("--titles to list the ncodes and titles of all works in the database")
     print("--ranklist to get the rankings of all works in the database")
     print("--text <ncode> to get the complete stored text of the given work")
@@ -91,6 +92,11 @@ if len(sys.argv) < 2:
 elif sys.argv[1] == "--yomou":
     import yomou
     arguments = yomou.get_top_300("http://yomou.syosetu.com/rank/list/type/total_total/")
+elif sys.argv[1] == "--updateknown":
+    ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
+    arguments = []
+    for ncode in ncodes:
+        arguments += [[ncode[0], -1]]
 elif sys.argv[1] == "--titles":
     titles = c.execute("SELECT ncode, title from narou where chapter=1").fetchall()
     if titles != None:
@@ -135,6 +141,8 @@ def response_text_indicates_ratelimit(string):
 
 def response_code_indicates_ratelimit(code):
     return code == 503
+
+dead = []
 
 print("note: chapter downloads aren't persistent until all updates are downloaded")
 for asdf in range(len(arguments)):
@@ -182,7 +190,8 @@ for asdf in range(len(arguments)):
     info = json.loads(info_json)
     
     if len(info) == 1:
-        print(f"work {ncode} does not exist or no longer exists on narou. skipping")
+        print(f"work {ncode} does not exist, or no longer exists on narou. skipping")
+        dead += [ncode]
         continue
     
     novel_datetime = info[1]["novelupdated_at"]
@@ -256,6 +265,7 @@ for asdf in range(len(arguments)):
         
         chapterstuff += [[urljoin(mainurl, suburl), li.get_text(), datetime]]
     
+    print(f"{len(chapterstuff)} chapters to download for this story")
     
     while len(chapterstuff) > 0:
         workarray = chapterstuff[:limit_chapters_at_once]
@@ -347,7 +357,10 @@ for asdf in range(len(arguments)):
         
     
     if rank == -1:
-        c.execute("UPDATE ranks set datetime=? where ncode=(?)", (novel_datetime, ncode))
+        rank = c.execute("SELECT rank from ranks where ncode=(?)", (ncode,)).fetchone()
+        if rank != None:
+            rank = rank[0]
+        c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
     else:
         c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
         c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
@@ -358,3 +371,6 @@ for asdf in range(len(arguments)):
 database.commit()
 c.close()
 database.close()
+
+print("You tried to rip the following stories, but they do not exist on narou. If they existed before, they were probably deleted.")
+print(" ".join(dead))
