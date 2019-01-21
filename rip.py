@@ -83,6 +83,7 @@ arguments = []
 if len(sys.argv) < 2:
     print("--yomou to get the top 300 from the yomou 'total_total' page")
     print("--updateknown to update all known works")
+    print("--updateandyomou to update all known works and the rank list at the same time")
     print("--titles to list the ncodes and titles of all works in the database")
     print("--ranklist to get the rankings of all works in the database")
     print("--text <ncode> [start, end] to get the complete stored text of the given work (optional: from chapter 'start' (inclusive) to chapter 'end' (exclusive))")
@@ -97,6 +98,21 @@ elif sys.argv[1] == "--updateknown":
     arguments = []
     for ncode in ncodes:
         arguments += [[ncode[0], -1]]
+elif sys.argv[1] == "--updateandyomou":
+    import yomou
+    ranks = yomou.get_top_300("http://yomou.syosetu.com/rank/list/type/total_total/")
+    known_ncodes = set()
+    arguments = []
+    for info in ranks:
+        ncode = re.search("ncode.syosetu.com/([^/]*)[/]?", info[0])[1]
+        known_ncodes.add(ncode)
+        arguments += [info]
+    
+    ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
+    for ncode in ncodes:
+        if ncode[0] not in known_ncodes:
+            arguments += [[ncode[0], -1]]
+    
 elif sys.argv[1] == "--titles":
     titles = c.execute("SELECT ncode, title from narou where chapter=1").fetchall()
     if titles != None:
@@ -357,7 +373,8 @@ for asdf in range(len(arguments)):
             print(f"sleeping for {rounded} seconds to reduce the risk of getting ratelimited...")
             time.sleep(want_to_sleep)
         
-        print(f"{len(chapterstuff)} chapters left to go for this story.")
+        if len(chapterstuff) != 0:
+            print(f"{len(chapterstuff)} chapters left to go for this story.")
         
     
     if rank == -1:
