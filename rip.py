@@ -8,7 +8,7 @@
 
 # Requires a modern version of Python 3.
 
-# Note: This tool scrapes each work's normal HTML pages, rather than using the txtdownload feature ( https://ncode.syosetu.com/txtdownload/top/ncode/108715/ ).
+# Note: This tool scrapes each story's normal HTML pages, rather than using the txtdownload feature ( https://ncode.syosetu.com/txtdownload/top/ncode/108715/ ).
 # This is becaue the txtdownload feature seems to have a much rougher rate limit than the normal HTML pages.
 # It also requires login cookies to function, and the way the ncode is encoded is different (e.g. n8725k becomes 108715).
 # Like working against individual HTML pages, it has to be done one chapter at a time, too.
@@ -51,7 +51,20 @@ enable_per_chapter_datetime_check = True
 # default is 8
 chapter_timeout = 8
 
+html_header = """<!doctype html>
+<html lang="ja">
+<head>
+<title>Log Horizon</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="narourip.css">
+</head>
+<body>
+"""
 
+html_footer = """
+</body>
+</html>"""
 
 from bs4 import BeautifulSoup
 import urllib
@@ -65,6 +78,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 import aiohttp
 import asyncio
 
+import shutil
+import os
 import os.path
 import re
 
@@ -79,16 +94,23 @@ c.execute("CREATE unique index if not exists idx_chapcode on narou (chapcode)")
 c.execute("CREATE table if not exists ranks (ncode text, rank text, datetime text)")
 c.execute("CREATE unique index if not exists idx_ncode on ranks (ncode)")
 
+c.execute("CREATE table if not exists volumes (ncode text, title text, volcode text, volume int, chapters text)")
+c.execute("CREATE unique index if not exists idx_volcode on volumes (volcode)")
+
+c.execute("CREATE table if not exists summaries (ncode text, summary text)")
+c.execute("CREATE unique index if not exists idx_summary_ncode on summaries (ncode)")
+
 arguments = []
 if len(sys.argv) < 2:
     print("--yomou to get the top 300 from the yomou 'total_total' page")
-    print("--updateknown to update all known works")
-    print("--updateandyomou to update all known works and the rank list at the same time")
-    print("--titles to list the ncodes and titles of all works in the database")
-    print("--ranklist to get the rankings of all works in the database")
-    print("--text <ncode> [start, end] to get the complete stored text of the given work (optional: from chapter 'start' (inclusive) to chapter 'end' (exclusive))")
-    print("--chapters <ncode> to get the list of chapters stored for the given work")
-    print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one work)")
+    print("--updateknown to update all known stories")
+    print("--updateandyomou to update all known stories and the rank list at the same time")
+    print("--titles to list the ncodes and titles of all stories in the database")
+    print("--ranklist to get the rankings of all stories in the database")
+    print("--text <ncode> [start, end] to get the complete stored text of the given story (optional: from chapter 'start' (inclusive) to chapter 'end' (exclusive))")
+    print("--htmlfiles <ncode> - makes html files out of each 'volume' of a story, in a folder named after it")
+    print("--chapters <ncode> to get the list of chapters stored for the given story")
+    print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one story)")
     exit()
 elif sys.argv[1] == "--yomou":
     import yomou
@@ -135,7 +157,69 @@ elif sys.argv[1] == "--text":
     print(f"{data[0][1]}")
     for chapter in data:
         print(f"\n\n----{chapter[3]}----\n\n")
-        print(f"{chapter[4]}")
+        text = chapter[4]
+        if text.startswith("<div"):
+            soup = BeautifulSoup(text, "html.parser")
+            text = soup.get_text()
+        print(f"{text}")
+    exit()
+elif sys.argv[1] == "--htmlfiles":
+    noveltitle = c.execute("SELECT title from narou where ncode=?", (sys.argv[2],)).fetchone()[0]
+    noveltitle = noveltitle.replace("/", "／")
+    if not os.path.exists(noveltitle):
+        os.mkdir(noveltitle)
+    shutil.copyfile("narourip.css", f"{noveltitle}/narourip.css")
+    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()[0]
+    if summary == None:
+        summary = ""
+    volumes = c.execute("SELECT * from volumes where ncode=?", (sys.argv[2],)).fetchall()
+    volumes.sort(key=lambda x:x[3])
+    i = 0
+    for vol in volumes:
+        i += 1
+        page = f"{html_header}"
+        
+        ncode = vol[0]
+        vol_title = vol[1]
+        volume = vol[3]
+        chapters = vol[4].split("\n")
+        texts = []
+        
+        for chapter in chapters:
+            chapcode = ncode+"-"+chapter
+            data = c.execute("SELECT chaptitle, content from narou where chapcode=?", (chapcode,)).fetchone()
+            if data == None:
+                print(f"failed to find chapter {chapter} of story {ncode}")
+            title = data[0]
+            content = data[1]
+            if not content.startswith("<div"):
+                content = f"<div class=preformat>{content}</div>"
+            texts += [[title, content]]
+        
+        page += f"\n<h1>{noveltitle}</h1>"
+        page += f"\n<h2>{vol_title}</h2>"
+        page += f"\n<p>{summary}</p>"
+        
+        page += f"\n<hr>"
+        
+        page += "\n<div id=toc>"
+        for text in texts:
+            page += f"\n<div><a href=\"#{text[0]}\">{text[0]}</a></div>"
+        page += "\n</div>"
+        
+        page += f"\n<hr>"
+        
+        for text in texts:
+            page += f"\n<div id={text[0]}><h3><a href=\"#{text[0]}\">{text[0]}</a></h3>{text[1]}</div>"
+            page += f"\n<hr>"
+        
+        page += html_footer
+        
+        page = page.replace(""" src="//""", """ src="http://""");
+        
+        with open(f"{noveltitle}/{noveltitle} - {i} - {vol_title}.html", "w", encoding='utf-8') as f:
+            f.write(page)
+    
     exit()
 elif sys.argv[1] == "--chapters":
     data = c.execute("SELECT ncode, title, chapter, chaptitle from narou where ncode=?", (sys.argv[2],)).fetchall()
@@ -164,6 +248,75 @@ def response_code_indicates_ratelimit(code):
 
 dead = []
 
+class Volume:
+    def __init__(self, name):
+        self.name = name
+        self.chapters = []
+    def stringify(self):
+        string = f"{self.name}"
+        for chapter in self.chapters:
+            string += f"\n  {chapter}"
+        return string
+
+def update_volumes(ncode, soup):
+    volume_list = []
+    latest_volume = Volume("")
+    for entry in soup.select(".index_box > *"):
+        if entry.name == "div":
+            if len(latest_volume.chapters) != 0:
+                volume_list += [latest_volume]
+            latest_volume = Volume(entry.get_text())
+        else:
+            li = entry.select(".subtitle a")[0]
+            dt = entry.select(".long_update")[0]
+            suburl = li.get("href")
+            updates = dt.select("span")
+            if len(updates) > 0:
+                datetime = updates[0].get("title")
+            else:
+                datetime = dt.get_text()
+            datetime = re.search("([0-9]{4}/[0-1][0-9]/[0-9]{2} [0-2][0-9]:[0-5][0-9])", datetime)
+            
+            if ncode not in suburl or datetime is None:
+                continue
+            
+            chapurl = suburl.rstrip("/").rsplit('/', 1)[-1]
+            latest_volume.chapters += [chapurl]
+    if len(latest_volume.chapters) != 0:
+        volume_list += [latest_volume]
+    
+    for i in range(len(volume_list)):
+        volume = volume_list[i]
+        title = volume.name
+        chapters = "\n".join(map(lambda x: str(x), volume.chapters))
+        c.execute("INSERT or replace into volumes values (?,?,?,?,?)", (ncode, title, ncode+"-"+str(i), i, chapters))
+    
+    pass
+
+def get_http_data(url):
+    data = None
+    failing = True
+    while failing:
+        try:
+            headers = { 'User-Agent' : 'Mozilla/5.0' }
+            req = urllib.request.Request(url, None, headers)
+            
+            r = urllib.request.urlopen(req)
+            data = r.read()
+            r.close()
+            failing = False
+        except urllib.request.HTTPError as e:
+            if response_code_indicates_ratelimit(e.code):
+                print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
+                time.sleep(wait_if_ratelimited)
+            else:
+                print(f"(exception `{e}`; retrying)")
+                time.sleep(1)
+        except Exception as e:
+            print(f"(exception `{e}`; retrying)")
+            time.sleep(1)
+    return data
+
 print("note: chapter downloads aren't persistent until all updates are downloaded")
 for asdf in range(len(arguments)):
     argument = arguments[asdf]
@@ -182,67 +335,22 @@ for asdf in range(len(arguments)):
     
     # check if it's up to date or not
     
-    info_json = None
-    failing = True
-    while failing:
-        try:
-            myurl = f"http://api.syosetu.com/novelapi/api/?out=json&ncode={ncode}&of=nu"
-            
-            headers = { 'User-Agent' : 'Mozilla/5.0' }
-            req = urllib.request.Request(myurl, None, headers)
-
-            r = urllib.request.urlopen(req)
-            
-            info_json = r.read()
-            r.close()
-            failing = False
-        except urllib.request.HTTPError as e:
-            if response_code_indicates_ratelimit(e.code):
-                print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
-                time.sleep(wait_if_ratelimited)
-                exit()
-            print(f"(exception `{e}`; retrying)")
-            time.sleep(1)
-        except Exception as e:
-            print(f"(exception `{e}`; retrying)")
-            time.sleep(1)
-    
+    info_json = get_http_data(f"http://api.syosetu.com/novelapi/api/?out=json&ncode={ncode}&of=nu-s")
     info = json.loads(info_json)
     
     if len(info) == 1:
-        print(f"work {ncode} does not exist, or no longer exists on narou. skipping")
+        print(f"story {ncode} does not exist, or no longer exists on narou. skipping")
         dead += [ncode]
         continue
     
     novel_datetime = info[1]["novelupdated_at"]
+    novel_summary = info[1]["story"]
     
-    if enable_per_novel_datetime_check and c.execute("SELECT datetime from ranks where ncode=? and datetime=?", (ncode, novel_datetime)).fetchone() != None:
-        print(f"up to date, skipping")
-        continue
+    c.execute("INSERT or replace into summaries values (?,?)", (ncode, novel_summary))
     
     print("getting chapter listing...")
     
-    data = None
-    failing = True
-    while failing:
-        try:
-            headers = { 'User-Agent' : 'Mozilla/5.0' }
-            req = urllib.request.Request(mainurl, None, headers)
-            
-            r = urllib.request.urlopen(mainurl)
-            data = r.read()
-            r.close()
-            failing = False
-        except urllib.request.HTTPError as e:
-            if response_code_indicates_ratelimit(e.code):
-                print("you've been ratelimited by narou. if you keep seeing this warning, wait a while and try again")
-                time.sleep(wait_if_ratelimited)
-                exit()
-            print(f"(exception `{e}`; retrying)")
-            time.sleep(1)
-        except Exception as e:
-            print(f"(exception `{e}`; retrying)")
-            time.sleep(1)
+    data = get_http_data(mainurl)
     
     soup = BeautifulSoup(data, "html.parser")
     
@@ -250,12 +358,16 @@ for asdf in range(len(arguments)):
         print("you've been ratelimited by narou. wait a while and try again")
         exit()
     
+    update_volumes(ncode, soup)
     
+    if enable_per_novel_datetime_check and c.execute("SELECT datetime from ranks where ncode=? and datetime=?", (ncode, novel_datetime)).fetchone() != None:
+        print(f"up to date, skipping")
+        continue
     
     title = soup.select("#novel_color .novel_title")
     
     if len(title) == 0:
-        print(f"work {ncode} does not have a coherent page, skipping.")
+        print(f"story {ncode} does not have a coherent page, skipping.")
         continue
         
     title = title[0].get_text().strip()
@@ -275,10 +387,10 @@ for asdf in range(len(arguments)):
         if ncode not in suburl or datetime is None:
             continue
         
+        chapurl = suburl.rstrip("/").rsplit('/', 1)[-1]
         datetime = datetime[1]
         
         if enable_per_chapter_datetime_check:
-            chapurl = suburl.rstrip("/").rsplit('/', 1)[-1]
             chapcode = ncode+"-"+chapurl
             if c.execute("SELECT * from narou where chapcode=? and datetime=?", (chapcode, datetime)).fetchone() != None:
                 continue
@@ -353,8 +465,8 @@ for asdf in range(len(arguments)):
             soup = BeautifulSoup(text, "html.parser")
             
             text = ""
-            for entry in soup.select("#novel_honbun"):
-                text += entry.get_text()
+            for entry in soup.select(".novel_view"):
+                text += str(entry)
             
             c.execute("INSERT or replace into narou values (?,?,?,?,?,?,?)", (ncode, title, chapcode, int(chapternum), chaptitle, datetime, text))
         
