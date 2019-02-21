@@ -54,7 +54,7 @@ chapter_timeout = 8
 html_header = """<!doctype html>
 <html lang="ja">
 <head>
-<title>Log Horizon</title>
+<title>TITLE</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="narourip.css">
@@ -165,10 +165,10 @@ elif sys.argv[1] == "--text":
     exit()
 elif sys.argv[1] == "--htmlfiles":
     noveltitle = c.execute("SELECT title from narou where ncode=?", (sys.argv[2],)).fetchone()[0]
-    noveltitle = noveltitle.replace("/", "／")
-    if not os.path.exists(noveltitle):
-        os.mkdir(noveltitle)
-    shutil.copyfile("narourip.css", f"{noveltitle}/narourip.css")
+    noveltitle_fs = noveltitle.replace("/", "／")
+    if not os.path.exists(noveltitle_fs):
+        os.mkdir(noveltitle_fs)
+    shutil.copyfile("narourip.css", f"{noveltitle_fs}/narourip.css")
     summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()[0]
     if summary == None:
         summary = ""
@@ -177,7 +177,7 @@ elif sys.argv[1] == "--htmlfiles":
     i = 0
     for vol in volumes:
         i += 1
-        page = f"{html_header}"
+        page = html_header.replace("TITLE", noveltitle)
         
         ncode = vol[0]
         vol_title = vol[1]
@@ -217,7 +217,7 @@ elif sys.argv[1] == "--htmlfiles":
         
         page = page.replace(""" src="//""", """ src="http://""");
         
-        with open(f"{noveltitle}/{noveltitle} - {i} - {vol_title}.html", "w", encoding='utf-8') as f:
+        with open(f"{noveltitle_fs}/{noveltitle_fs} - {i} - {vol_title}.html", "w", encoding='utf-8') as f:
             f.write(page)
     
     exit()
