@@ -202,11 +202,10 @@ elif sys.argv[1] == "--htmlvolumes":
     i = 0
     for vol in volumes:
         i += 1
-        page = html_header.replace("TITLE", noveltitle)
+        page = html_header.replace("TITLE", html_escape(noveltitle))
         
         ncode = vol[0]
         vol_title = vol[1]
-        vol_title = html_escape(vol_title)
         volume = vol[3]
         chapters = vol[4].split("\n")
         texts = []
@@ -222,9 +221,9 @@ elif sys.argv[1] == "--htmlvolumes":
                 content = f"<div class=preformat>{content}</div>"
             texts += [[title, content]]
         
-        page += f"\n<h1>{noveltitle}</h1>"
+        page += f"\n<h1>{html_escape(noveltitle)}</h1>"
         if vol_title.strip() != "":
-            page += f"\n<h2>{vol_title}</h2>"
+            page += f"\n<h2>{html_escape(vol_title)}</h2>"
         page += f"\n<p>{summary}</p>"
         
         page += f"\n<hr>"
@@ -278,7 +277,6 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
         
         ncode = vol[0]
         vol_title = vol[1]
-        vol_title = html_escape(vol_title)
         volume = vol[3]
         chapters = vol[4].split("\n")
         texts = []
@@ -321,11 +319,11 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
             chaptitle = text[0]
             content = text[1]
             
-            page = html_header.replace("TITLE", noveltitle)
+            page = html_header.replace("TITLE", html_escape(noveltitle))
         
-            page += f"\n<h1>{noveltitle}</h1>"
+            page += f"\n<h1>{html_escape(noveltitle)}</h1>"
             if vol_title.strip() != "":
-                page += f"\n<h2>{vol_title}</h2>"
+                page += f"\n<h2>{html_escape(vol_title)}</h2>"
             page += f"\n<p>{summary}</p>"
             
             page += f"\n<hr>"
