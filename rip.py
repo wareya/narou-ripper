@@ -103,6 +103,8 @@ import re
 import html
 def html_escape(text):
     return html.escape(text, quote=True)
+def url_escape(text):
+    return urllib.parse.quote(text)
 
 import sqlite3
 
@@ -221,20 +223,23 @@ elif sys.argv[1] == "--htmlvolumes":
             texts += [[title, content]]
         
         page += f"\n<h1>{noveltitle}</h1>"
-        page += f"\n<h2>{vol_title}</h2>"
+        if vol_title.strip() != "":
+            page += f"\n<h2>{vol_title}</h2>"
         page += f"\n<p>{summary}</p>"
         
         page += f"\n<hr>"
         
         page += "\n<div id=toc>"
         for text in texts:
-            page += f"\n<div><a href=\"#{text[0]}\">{text[0]}</a></div>"
+            chaptitle = text[0]
+            page += f"\n<div><a href=\"#{url_escape(chaptitle)}\">{html_escape(chaptitle)}</a></div>"
         page += "\n</div>"
         
         page += f"\n<hr>"
         
         for text in texts:
-            page += f"\n<div id={text[0]}><h3><a href=\"#{text[0]}\">{text[0]}</a></h3>{text[1]}</div>"
+            chaptitle = text[0]
+            page += f"\n<div id='{url_escape(chaptitle)}'><h3><a href=\"#{html_escape(chaptitle)}\">{html_escape(chaptitle)}</a></h3>{text[1]}</div>"
             page += f"\n<hr>"
         
         page += html_footer
@@ -292,7 +297,7 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
             data = c.execute("SELECT chaptitle, content from narou where chapcode=?", (chapcode,)).fetchone()
             if data == None:
                 print(f"failed to find chapter {chapter} of story {ncode}")
-            chaptitle = html_escape(data[0])
+            chaptitle = data[0]
             content = data[1]
             if not content.startswith("<div"):
                 content = f"<div class=preformat>{content}</div>"
@@ -319,26 +324,27 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
             page = html_header.replace("TITLE", noveltitle)
         
             page += f"\n<h1>{noveltitle}</h1>"
-            page += f"\n<h2>{vol_title}</h2>"
+            if vol_title.strip() != "":
+                page += f"\n<h2>{vol_title}</h2>"
             page += f"\n<p>{summary}</p>"
             
             page += f"\n<hr>"
             
             page += f"\n<div style='display: flex; justify-content: center; width: 100%'>"
             if j > 0:
-                page += f"\n<div style='width: 30%; text-align: right'><a href='{get_chapter_fname(j-1)}'>← {texts[j-1][0]}</a></div>"
+                page += f"\n<div style='width: 30%; text-align: right'><a href='{url_escape(get_chapter_fname(j-1))}'>← {texts[j-1][0]}</a></div>"
             else:
                 page += f"\n<div style='width: 30%'></div>"
-            page += f"\n<div style='width: 40%; text-align: center'>{chaptitle}</div>"
+            page += f"\n<div style='width: 40%; text-align: center'>{html_escape(chaptitle)}</div>"
             if j+1 < len(texts):
-                page += f"\n<div style='width: 30%; text-align: left'><a href='{get_chapter_fname(j+1)}'>{texts[j+1][0]}→</a></div>"
+                page += f"\n<div style='width: 30%; text-align: left'><a href='{url_escape(get_chapter_fname(j+1))}'>{texts[j+1][0]}→</a></div>"
             else:
                 page += f"\n<div style='width: 30%'></div>"
             page += f"\n</div>"
             
             page += f"\n<hr>"
             
-            page += f"\n<div id={chaptitle}><h3>{chaptitle}</h3>{content}</div>"
+            page += f"\n<div id='{url_escape(chaptitle)}'><h3>{html_escape(chaptitle)}</h3>{content}</div>"
             
             page += html_footer
             
