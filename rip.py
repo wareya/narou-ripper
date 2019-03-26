@@ -66,6 +66,23 @@ html_footer = """
 </body>
 </html>"""
 
+def sanitize_fs_name(text):
+    mapping = [
+      ('/', '／' ),
+      ('\\', '＼' ),
+      ('?', '？' ),
+      ('%', '％' ),
+      ('*', '＊' ),
+      (':', '：' ),
+      ('|', '｜' ),
+      ('"', '”' ),
+      ('<', '＜' ),
+      ('>', '＞' )
+    ]
+    for m in mapping:
+        text = text.replace(m[0], m[1])
+    return re.sub(' +', ' ', text)
+
 from bs4 import BeautifulSoup
 import urllib
 from urllib.parse import urljoin
@@ -82,6 +99,10 @@ import shutil
 import os
 import os.path
 import re
+
+import html
+def html_escape(text):
+    return html.escape(text, quote=True)
 
 import sqlite3
 
@@ -108,7 +129,8 @@ if len(sys.argv) < 2:
     print("--titles to list the ncodes and titles of all stories in the database")
     print("--ranklist to get the rankings of all stories in the database")
     print("--text <ncode> [start, end] to get the complete stored text of the given story (optional: from chapter 'start' (inclusive) to chapter 'end' (exclusive))")
-    print("--htmlfiles <ncode> - makes html files out of each 'volume' of a story, in a folder named after it")
+    print("--htmlvolumes <ncode> - makes html files out of each 'volume' of a story, in a folder named after it")
+    print("--htmlchapters <ncode> (or --htmlchapters_nonums) - makes html files out of each 'chapter' of a story, in a folder named after it. using --htmlchapters_nonums prevents the chapter number from being added, useful if chapters are numbered by the author.")
     print("--chapters <ncode> to get the list of chapters stored for the given story")
     print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one story)")
     exit()
@@ -163,9 +185,10 @@ elif sys.argv[1] == "--text":
             text = soup.get_text()
         print(f"{text}")
     exit()
-elif sys.argv[1] == "--htmlfiles":
+elif sys.argv[1] == "--htmlvolumes":
     noveltitle = c.execute("SELECT title from narou where ncode=?", (sys.argv[2],)).fetchone()[0]
-    noveltitle_fs = noveltitle.replace("/", "／")
+    noveltitle_fs = sanitize_fs_name(noveltitle)
+    noveltitle = html_escape(noveltitle)
     if not os.path.exists(noveltitle_fs):
         os.mkdir(noveltitle_fs)
     shutil.copyfile("narourip.css", f"{noveltitle_fs}/narourip.css")
@@ -181,6 +204,7 @@ elif sys.argv[1] == "--htmlfiles":
         
         ncode = vol[0]
         vol_title = vol[1]
+        vol_title = html_escape(vol_title)
         volume = vol[3]
         chapters = vol[4].split("\n")
         texts = []
@@ -190,7 +214,7 @@ elif sys.argv[1] == "--htmlfiles":
             data = c.execute("SELECT chaptitle, content from narou where chapcode=?", (chapcode,)).fetchone()
             if data == None:
                 print(f"failed to find chapter {chapter} of story {ncode}")
-            title = data[0]
+            title = html_escape(data[0])
             content = data[1]
             if not content.startswith("<div"):
                 content = f"<div class=preformat>{content}</div>"
@@ -217,8 +241,115 @@ elif sys.argv[1] == "--htmlfiles":
         
         page = page.replace(""" src="//""", """ src="http://""");
         
-        with open(f"{noveltitle_fs}/{noveltitle_fs} - {i} - {vol_title}.html", "w", encoding='utf-8') as f:
+        fs_vol_title = sanitize_fs_name(vol_title).strip()
+        if fs_vol_title != "":
+            fs_vol_title = " - " + fs_vol_title
+        
+        if len(volumes) > 1:
+            vol_num = f" - {i}"
+        else:
+            vol_num = ""
+        
+        fname = f"{noveltitle_fs}/{noveltitle_fs}{vol_num}{fs_vol_title}.html"
+        
+        with open(fname, "w", encoding='utf-8') as f:
             f.write(page)
+    
+    exit()
+elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
+    noveltitle = c.execute("SELECT title from narou where ncode=?", (sys.argv[2],)).fetchone()[0]
+    noveltitle_fs = sanitize_fs_name(noveltitle)
+    noveltitle = html_escape(noveltitle)
+    if not os.path.exists(noveltitle_fs):
+        os.mkdir(noveltitle_fs)
+    shutil.copyfile("narourip.css", f"{noveltitle_fs}/narourip.css")
+    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()[0]
+    if summary == None:
+        summary = ""
+    volumes = c.execute("SELECT * from volumes where ncode=?", (sys.argv[2],)).fetchall()
+    volumes.sort(key=lambda x:x[3])
+    for (i, vol) in enumerate(volumes):
+        i += 1
+        
+        ncode = vol[0]
+        vol_title = vol[1]
+        vol_title = html_escape(vol_title)
+        volume = vol[3]
+        chapters = vol[4].split("\n")
+        texts = []
+        
+        fs_vol_title = sanitize_fs_name(vol_title).strip()
+        if fs_vol_title != "":
+            fs_vol_title = " - " + fs_vol_title
+        
+        if len(volumes) > 1:
+            vol_num = f" - {i}"
+        else:
+            vol_num = ""
+        
+        for chapter in chapters:
+            chapcode = ncode+"-"+chapter
+            data = c.execute("SELECT chaptitle, content from narou where chapcode=?", (chapcode,)).fetchone()
+            if data == None:
+                print(f"failed to find chapter {chapter} of story {ncode}")
+            chaptitle = html_escape(data[0])
+            content = data[1]
+            if not content.startswith("<div"):
+                content = f"<div class=preformat>{content}</div>"
+            texts += [[chaptitle, content]]
+        
+        def get_chapter_fname(j):
+            chaptitle = texts[j][0]
+            
+            fs_chaptitle = sanitize_fs_name(chaptitle).strip()
+            if fs_chaptitle != "":
+                fs_chaptitle = " - " + fs_chaptitle
+                
+            if sys.argv[1] == "--htmlchapters_nonums":
+                chap_num = ""
+            else:
+                chap_num = f" - {j+1}"
+            
+            return f"{noveltitle_fs}{vol_num}{fs_vol_title}{chap_num}{fs_chaptitle}.html"
+        
+        for (j, text) in enumerate(texts):
+            chaptitle = text[0]
+            content = text[1]
+            
+            page = html_header.replace("TITLE", noveltitle)
+        
+            page += f"\n<h1>{noveltitle}</h1>"
+            page += f"\n<h2>{vol_title}</h2>"
+            page += f"\n<p>{summary}</p>"
+            
+            page += f"\n<hr>"
+            
+            page += f"\n<div style='display: flex; justify-content: center; width: 100%'>"
+            if j > 0:
+                page += f"\n<div style='width: 30%; text-align: right'><a href='{get_chapter_fname(j-1)}'>← {texts[j-1][0]}</a></div>"
+            else:
+                page += f"\n<div style='width: 30%'></div>"
+            page += f"\n<div style='width: 40%; text-align: center'>{chaptitle}</div>"
+            if j+1 < len(texts):
+                page += f"\n<div style='width: 30%; text-align: left'><a href='{get_chapter_fname(j+1)}'>{texts[j+1][0]}→</a></div>"
+            else:
+                page += f"\n<div style='width: 30%'></div>"
+            page += f"\n</div>"
+            
+            page += f"\n<hr>"
+            
+            page += f"\n<div id={chaptitle}><h3>{chaptitle}</h3>{content}</div>"
+            
+            page += html_footer
+            
+            page = page.replace(""" src="//""", """ src="http://""");
+            
+            partial_fname = get_chapter_fname(j)
+            
+            fname = f"{noveltitle_fs}/{partial_fname}"
+            
+            with open(fname, "w", encoding='utf-8') as f:
+                f.write(page)
     
     exit()
 elif sys.argv[1] == "--chapters":
