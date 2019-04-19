@@ -134,6 +134,9 @@ if len(sys.argv) < 2:
     print("--htmlvolumes <ncode> - makes html files out of each 'volume' of a story, in a folder named after it")
     print("--htmlchapters <ncode> (or --htmlchapters_nonums) - makes html files out of each 'chapter' of a story, in a folder named after it. using --htmlchapters_nonums prevents the chapter number from being added, useful if chapters are numbered by the author.")
     print("--chapters <ncode> to get the list of chapters stored for the given story")
+    print("--charcount <ncode> to get the length of the story in characters (newlines and leading/trailing spaces ignored)")
+    print("--charcount <ncode> <chapter number> same, for chapters")
+    print("--charcount <ncode> <first chapter> <last chapter> same, for a range of chapters (inclusive)")
     print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one story)")
     exit()
 elif sys.argv[1] == "--yomou":
@@ -363,6 +366,48 @@ elif sys.argv[1] == "--chapters":
     for chapter in data:
         print(f"{chapter[2]} - {chapter[3]}")
     exit()
+elif sys.argv[1] == "--charcount":
+    ncode = sys.argv[2]
+    if len(sys.argv) == 3:
+        data = c.execute("SELECT content from narou where ncode=?", (ncode,)).fetchall()
+        length = 0
+        for entry in data:
+            text = entry[0]
+            if text.startswith("<div"):
+                soup = BeautifulSoup(text, "html.parser")
+                text = soup.get_text()
+            for line in text.splitlines(False):
+                length += len(line.strip())
+        print(length)
+    elif len(sys.argv) == 4:
+        chapnum = sys.argv[3]
+        chapcode = ncode+"-"+chapnum
+        data = c.execute("SELECT content from narou where chapcode=?", (chapcode,)).fetchone()
+        if data == None:
+            print("no such chapter for that story")
+        
+        text = data[0]
+        length = 0
+        if text.startswith("<div"):
+            soup = BeautifulSoup(text, "html.parser")
+            text = soup.get_text()
+            for line in text.splitlines(False):
+                length += len(line.strip())
+        print(length)
+    elif len(sys.argv) > 4:
+        first = sys.argv[3]
+        last = sys.argv[4]
+        data = c.execute("SELECT content from narou where ncode=? and chapter>=? and chapter<=?", (ncode, first, last)).fetchall()
+        length = 0
+        for entry in data:
+            text = entry[0]
+            if text.startswith("<div"):
+                soup = BeautifulSoup(text, "html.parser")
+                text = soup.get_text()
+            for line in text.splitlines(False):
+                length += len(line.strip())
+        print(length)
+        
 elif sys.argv[1] == "--deletedatetimedata":
     # undocumented, for debugging/repair only
     print("Setting ALL datetime data to NULL. This is only for debugging/repair.")
