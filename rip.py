@@ -123,6 +123,8 @@ c.execute("CREATE unique index if not exists idx_volcode on volumes (volcode)")
 c.execute("CREATE table if not exists summaries (ncode text, summary text)")
 c.execute("CREATE unique index if not exists idx_summary_ncode on summaries (ncode)")
 
+goodranks = False
+
 arguments = []
 if len(sys.argv) < 2:
     print("--yomou to get the top 300 from the yomou 'total_total' page")
@@ -143,6 +145,7 @@ if len(sys.argv) < 2:
 elif sys.argv[1] == "--yomou":
     import yomou
     arguments = yomou.get_top_300("http://yomou.syosetu.com/rank/list/type/total_total/")
+    goodranks = True
 elif sys.argv[1] == "--updateknown":
     ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
     arguments = []
@@ -163,6 +166,7 @@ elif sys.argv[1] == "--updateandyomou":
         if ncode[0] not in known_ncodes:
             arguments += [[ncode[0], -1]]
     
+    goodranks = True
 elif sys.argv[1] == "--titles":
     titles = c.execute("SELECT ncode, title from narou where chapter=1").fetchall()
     if titles != None:
@@ -448,6 +452,24 @@ elif sys.argv[1] == "--dumpall":
         done += 1
         print(f"{done}/{target} ({ncode})")
     exit()
+elif sys.argv[1] == "--dumpnames":
+    print("dumping names")
+    with open("other_stats.txt", "w", encoding='utf-8', newline='\n') as f:
+        ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
+        for ncode in ncodes:
+            ncode = ncode[0]
+            try:
+                rank = c.execute("SELECT rank from ranks where ncode=?", (ncode,)).fetchall()[0][0]
+            except:
+                rank = None
+            if rank == None:
+                rank = "x"
+            title = c.execute("SELECT title from narou where ncode=? limit 1", (ncode,)).fetchall()[0][0]
+            
+            tabchar = '\t'
+            newline = '\n'
+            f.write(f"{ncode}\t{rank}\t{title.replace(tabchar, ' ').replace(newline, ' ')}\n")
+    exit()
 elif sys.argv[1] == "--deletedatetimedata":
     # undocumented, for debugging/repair only
     print("Setting ALL datetime data to NULL. This is only for debugging/repair.")
@@ -536,6 +558,14 @@ def get_http_data(url):
             print(f"(exception `{e}`; retrying)")
             time.sleep(1)
     return data
+
+if goodranks:
+    for argument in arguments:
+        mainurl = argument[0]
+        ncode = mainurl.rstrip("/").rsplit('/', 1)[-1]
+        rank = argument[1]
+        c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
+        c.execute("UPDATE ranks set rank=? where ncode=?", (rank, ncode))
 
 print("checking update dates")
 
@@ -743,10 +773,13 @@ for asdf in range(len(arguments)):
         
     
     if rank == -1:
-        rank = c.execute("SELECT rank from ranks where ncode=(?)", (ncode,)).fetchone()
-        if rank != None:
-            rank = rank[0]
-        c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
+        if goodranks:
+            c.execute("INSERT or replace into ranks values (?,null,?)", (ncode, novel_datetime))
+        else:
+            rank = c.execute("SELECT rank from ranks where ncode=(?)", (ncode,)).fetchone()
+            if rank != None:
+                rank = rank[0]
+            c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
     else:
         c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
         c.execute("INSERT or replace into ranks values (?,?,?)", (ncode, rank, novel_datetime))
