@@ -409,9 +409,30 @@ elif sys.argv[1] == "--charcount":
                 length += len(line.strip())
         print(length)
 elif sys.argv[1] == "--dumpall":
+    from datetime import datetime
     ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
+    target = len(ncodes)
+    done = 0
+    skipping = False
     for ncode in ncodes:
         ncode = ncode[0]
+        writepath = f"scripts/{ncode}.txt"
+        if os.path.exists(writepath):
+            otherdata = c.execute("SELECT datetime from ranks where ncode=?", (ncode,)).fetchall()
+            #print(F"????? {otherdata} {ncode}")
+            if len(otherdata) != 0 and otherdata[0][0] != None:
+                from_fs = datetime.fromtimestamp(os.path.getmtime(writepath)).astimezone()
+                from_narou = datetime.strptime(otherdata[0][0] + ' +0900', '%Y-%m-%d %H:%M:%S %z').astimezone()
+                #print("---")
+                #print(f"from fs (formatted): {from_fs}")
+                #print(f"from narou: {from_narou}")
+                if from_fs > from_narou:
+                    if not skipping:
+                        print("skipping some stories because we already (apparently) dumped this version of them")
+                    skipping = True
+                    done += 1
+                    continue
+        skipping = False
         data = c.execute("SELECT ncode, title, chapter, chaptitle, content from narou where ncode=?", (ncode,)).fetchall()
         data.sort(key=lambda x:x[2])
         out_text = ""
@@ -422,8 +443,10 @@ elif sys.argv[1] == "--dumpall":
                 text = soup.get_text()
             out_text += f"{text}\n\n\n"
         
-        with open(f"scripts/{ncode}.txt", "w", encoding='utf-8', newline='\n') as f:
+        with open(writepath, "w", encoding='utf-8', newline='\n') as f:
             f.write(out_text)
+        done += 1
+        print(f"{done}/{target} ({ncode})")
     exit()
 elif sys.argv[1] == "--deletedatetimedata":
     # undocumented, for debugging/repair only
