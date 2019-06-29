@@ -137,6 +137,7 @@ if len(sys.argv) < 2:
     print("--charcount <ncode> to get the length of the story in characters (newlines and leading/trailing spaces ignored)")
     print("--charcount <ncode> <chapter number> same, for chapters")
     print("--charcount <ncode> <first chapter> <last chapter> same, for a range of chapters (inclusive)")
+    print("--dumpall dumps the entire database to e.g. scripts/n1701bm.txt")
     print("anything else will be interpreted as a list of ncodes or urls to rip into the database (this is how you download just one story)")
     exit()
 elif sys.argv[1] == "--yomou":
@@ -407,7 +408,23 @@ elif sys.argv[1] == "--charcount":
             for line in text.splitlines(False):
                 length += len(line.strip())
         print(length)
+elif sys.argv[1] == "--dumpall":
+    ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
+    for ncode in ncodes:
+        ncode = ncode[0]
+        data = c.execute("SELECT ncode, title, chapter, chaptitle, content from narou where ncode=?", (ncode,)).fetchall()
+        data.sort(key=lambda x:x[2])
+        out_text = ""
+        for chapter in data:
+            text = chapter[4]
+            if text.startswith("<div"):
+                soup = BeautifulSoup(text, "html.parser")
+                text = soup.get_text()
+            out_text += f"{text}\n\n\n"
         
+        with open(f"scripts/{ncode}.txt", "w", encoding='utf-8', newline='\n') as f:
+            f.write(out_text)
+    exit()
 elif sys.argv[1] == "--deletedatetimedata":
     # undocumented, for debugging/repair only
     print("Setting ALL datetime data to NULL. This is only for debugging/repair.")
@@ -497,6 +514,42 @@ def get_http_data(url):
             time.sleep(1)
     return data
 
+print("checking update dates")
+
+newargs = []
+for asdf in range(0, len(arguments), 20):
+    group = arguments[asdf:asdf+20]
+    ncode_list = "-".join(map(lambda x: x[0].rstrip("/").rsplit('/', 1)[-1], group))
+    
+    info_json = get_http_data(f"http://api.syosetu.com/novelapi/api/?out=json&ncode={ncode_list}&of=n-nu-s")
+    info = json.loads(info_json)
+    info_map = {}
+    for etc in info[1:]:
+        info_map[etc["ncode"].lower()] = etc
+        
+    for argument in group:
+        mainurl = argument[0]
+        ncode = mainurl.rstrip("/").rsplit('/', 1)[-1]
+        rank = argument[1]
+        # check if it's up to date or not
+        if ncode not in info_map:
+            print(f"story {ncode} does not exist, or no longer exists on narou. skipping")
+            dead += [ncode]
+            continue
+        
+        novel_datetime = info_map[ncode]["novelupdated_at"]
+        novel_summary = info_map[ncode]["story"]
+        c.execute("INSERT or replace into summaries values (?,?)", (ncode, novel_summary))
+        
+        if enable_per_novel_datetime_check and c.execute("SELECT datetime from ranks where ncode=? and datetime=?", (ncode, novel_datetime)).fetchone() != None:
+            print(f"{ncode} is up to date, skipping")
+            continue
+        
+        print(f"adding {ncode}")
+        newargs += [argument]
+    
+arguments = newargs
+
 print("note: chapter downloads aren't persistent until all updates are downloaded")
 for asdf in range(len(arguments)):
     argument = arguments[asdf]
@@ -524,9 +577,6 @@ for asdf in range(len(arguments)):
         continue
     
     novel_datetime = info[1]["novelupdated_at"]
-    novel_summary = info[1]["story"]
-    
-    c.execute("INSERT or replace into summaries values (?,?)", (ncode, novel_summary))
     
     print("getting chapter listing...")
     
