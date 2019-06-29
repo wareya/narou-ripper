@@ -150,7 +150,7 @@ elif sys.argv[1] == "--updateknown":
     ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
     arguments = []
     for ncode in ncodes:
-        arguments += [[ncode[0], -1]]
+        arguments += [[ncode[0], None]]
 elif sys.argv[1] == "--updateandyomou":
     import yomou
     ranks = yomou.get_top_300("http://yomou.syosetu.com/rank/list/type/total_total/")
@@ -164,7 +164,7 @@ elif sys.argv[1] == "--updateandyomou":
     ncodes = c.execute("SELECT distinct ncode from narou").fetchall()
     for ncode in ncodes:
         if ncode[0] not in known_ncodes:
-            arguments += [[ncode[0], -1]]
+            arguments += [[ncode[0], None]]
     
     goodranks = True
 elif sys.argv[1] == "--titles":
@@ -564,6 +564,8 @@ if goodranks:
         mainurl = argument[0]
         ncode = mainurl.rstrip("/").rsplit('/', 1)[-1]
         rank = argument[1]
+        if rank < 1:
+            rank = None
         c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
         c.execute("UPDATE ranks set rank=? where ncode=?", (rank, ncode))
 
