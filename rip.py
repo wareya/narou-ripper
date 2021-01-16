@@ -67,6 +67,8 @@ html_footer = """
 </html>"""
 
 def sanitize_fs_name(text):
+    if text == None:
+        return ""
     mapping = [
       ('/', '／' ),
       ('\\', '＼' ),
@@ -102,8 +104,12 @@ import re
 
 import html
 def html_escape(text):
+    if text == None:
+        return ""
     return html.escape(text, quote=True)
 def url_escape(text):
+    if text == None:
+        return ""
     return urllib.parse.quote(text)
 
 import sqlite3
@@ -201,10 +207,12 @@ elif sys.argv[1] == "--htmlvolumes":
     noveltitle = html_escape(noveltitle)
     if not os.path.exists(noveltitle_fs):
         os.mkdir(noveltitle_fs)
-    shutil.copyfile("narourip.css", f"{noveltitle_fs}/narourip.css")
-    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()[0]
+    shutil.copyfile("data/narourip.css", f"{noveltitle_fs}/narourip.css")
+    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()
     if summary == None:
         summary = ""
+    else:
+        summary = summary[0]
     volumes = c.execute("SELECT * from volumes where ncode=?", (sys.argv[2],)).fetchall()
     volumes.sort(key=lambda x:x[3])
     i = 0
@@ -274,19 +282,34 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
     noveltitle = html_escape(noveltitle)
     if not os.path.exists(noveltitle_fs):
         os.mkdir(noveltitle_fs)
-    shutil.copyfile("narourip.css", f"{noveltitle_fs}/narourip.css")
-    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()[0]
+    shutil.copyfile("data/narourip.css", f"{noveltitle_fs}/narourip.css")
+    summary = c.execute("SELECT summary from summaries where ncode=?", (sys.argv[2],)).fetchone()
     if summary == None:
         summary = ""
+    else:
+        summary = summary[0]
     volumes = c.execute("SELECT * from volumes where ncode=?", (sys.argv[2],)).fetchall()
     volumes.sort(key=lambda x:x[3])
+    dummymode = False
+    if len(volumes) == 0:
+        dummymode = True
+        data = c.execute("SELECT chapter from narou where ncode=?", (sys.argv[2],)).fetchall()
+        data.sort(key=lambda x:x[0])
+        data = map(lambda x:str(x[0]), data)
+        volumes = [[]]
     for (i, vol) in enumerate(volumes):
         i += 1
         
-        ncode = vol[0]
-        vol_title = vol[1]
-        volume = vol[3]
-        chapters = vol[4].split("\n")
+        if not dummymode:
+            ncode = vol[0]
+            vol_title = vol[1]
+            volume = vol[3]
+            chapters = vol[4].split("\n")
+        else:
+            ncode = sys.argv[2]
+            vol_title = ""
+            volume = 1
+            chapters = data
         texts = []
         
         fs_vol_title = sanitize_fs_name(vol_title).strip()
@@ -338,12 +361,18 @@ elif sys.argv[1] == "--htmlchapters" or sys.argv[1] == "--htmlchapters_nonums":
             
             page += f"\n<div style='display: flex; justify-content: center; width: 100%'>"
             if j > 0:
-                page += f"\n<div style='width: 30%; text-align: right'><a href='{url_escape(get_chapter_fname(j-1))}'>← {texts[j-1][0]}</a></div>"
+                prev_ = texts[j-1][0]
+                if prev_ == None:
+                    prev_ = str(j)
+                page += f"\n<div style='width: 30%; text-align: right'><a href='{url_escape(get_chapter_fname(j-1))}'>← {prev_}</a></div>"
             else:
                 page += f"\n<div style='width: 30%'></div>"
             page += f"\n<div style='width: 40%; text-align: center'>{html_escape(chaptitle)}</div>"
             if j+1 < len(texts):
-                page += f"\n<div style='width: 30%; text-align: left'><a href='{url_escape(get_chapter_fname(j+1))}'>{texts[j+1][0]}→</a></div>"
+                next_ = texts[j+1][0]
+                if next_ == None:
+                    next_ = str(j+2)
+                page += f"\n<div style='width: 30%; text-align: left'><a href='{url_escape(get_chapter_fname(j+1))}'>{next_}→</a></div>"
             else:
                 page += f"\n<div style='width: 30%'></div>"
             page += f"\n</div>"
@@ -564,7 +593,7 @@ if goodranks:
         mainurl = argument[0]
         ncode = mainurl.rstrip("/").rsplit('/', 1)[-1]
         rank = argument[1]
-        if rank < 1:
+        if rank != None and int(rank) < 1:
             rank = None
         c.execute("UPDATE ranks set rank=null where rank=(?)", (rank,))
         c.execute("UPDATE ranks set rank=? where ncode=?", (rank, ncode))
