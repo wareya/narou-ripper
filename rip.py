@@ -819,9 +819,14 @@ for asdf in range(len(arguments)):
     print("done.")
 
 database.commit()
-c.close()
-database.close()
 
 if len(dead) > 0:
     print("You tried to rip the following stories, but they do not exist on narou. If they existed before, they were probably deleted.")
-    print(" ".join(dead))
+    sql = 'SELECT ncode, title FROM narou WHERE chapter=1 and ncode in ({0})'.format(', '.join('?' for _ in dead))
+    out = c.execute(sql, (dead)).fetchall()
+    for (ncode, title) in out:
+        print(ncode + "\t" + title)
+    #print(" ".join(dead))
+
+c.close()
+database.close()
