@@ -631,7 +631,10 @@ for asdf in range(0, len(arguments), 20):
         
         print(f"adding {ncode}")
         newargs += [argument]
-    
+
+for asdf in dead:
+    # double-checking dead stories goes here
+
 arguments = newargs
 
 print("note: chapter downloads aren't persistent until all updates are downloaded")
